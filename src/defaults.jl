@@ -3,10 +3,6 @@ const integral_offset = 1e-8
 const integral_zero = 0.0 + integral_offset
 const integral_one = 1.0 - integral_offset
 
-const min_I_P = 0.00
-const max_I_P = 75.0
-const no_pts_I_P = 151
-
 const min_eta_CD = 0.0
 const max_eta_CD = 1.5
 const no_pts_eta_CD = 51

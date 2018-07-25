@@ -1,4 +1,5 @@
 @with_kw mutable struct Reactor <: AbstractReactor
+
   T_bar::AbstractSymbol
 
   n_bar::AbstractSymbol = symbols(:n_bar)
@@ -46,10 +47,6 @@
   eta_T::AbstractSymbol = 0.3531
   eta_RF::AbstractSymbol = 0.4
 
-  tau_RU::AbstractSymbol = 30.0
-  tau_RD::AbstractSymbol = 30.0
-  tau_DW::AbstractSymbol = 1800.0
-
   tau_FT::AbstractSymbol = 7200.0
   C_ejima::AbstractSymbol = 0.3
 
@@ -77,6 +74,10 @@
 
   wave_theta::AbstractSymbol = 135.0
   eta_LH::AbstractSymbol = 0.6
+
+  min_I_P::Int = 0
+  max_I_P::Int = 75
+  no_pts_I_P::Int = 151
 
   tau_E::AbstractCalculated = nothing
   p_bar::AbstractCalculated = nothing
@@ -117,6 +118,7 @@
 
   constraint::AbstractKey = nothing
 
+  skipped_limits::Vector{Symbol} = []
   ignored_limits::Vector{Symbol} = [:pcap, :heat]
 
   branch_id::Int = 1
