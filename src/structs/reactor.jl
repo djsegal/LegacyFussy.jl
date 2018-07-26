@@ -75,10 +75,6 @@
   wave_theta::AbstractSymbol = 135.0
   eta_LH::AbstractSymbol = 0.6
 
-  min_I_P::Int = 0
-  max_I_P::Int = 75
-  no_pts_I_P::Int = 151
-
   tau_E::AbstractCalculated = nothing
   p_bar::AbstractCalculated = nothing
   P_F::AbstractCalculated = nothing

@@ -27,6 +27,7 @@ module Fussy
   include("solutions/index.jl")
 
   export Reactor
+  export Study
   export Scan
 
   function __init__()

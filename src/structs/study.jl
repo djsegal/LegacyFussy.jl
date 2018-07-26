@@ -1,5 +1,5 @@
 mutable struct Study <: AbstractStudy
-  T_bar_list::Vector{AbstractFloat}
+  parameter_list::Vector{AbstractFloat}
 
   parameter::Symbol
   sensitivity::Real
@@ -12,395 +12,120 @@ mutable struct Study <: AbstractStudy
   wall_reactors::Vector{AbstractReactor}
 end
 
-function Study(cur_T_bar_list, cur_parameter; sensitivity=0.1, num_points=7, deck=nothing)
-  cur_study = Study(
-    collect(cur_T_bar_list), cur_parameter,
-    sensitivity, num_points, deck,
-    [], [], []
-  )
+function Study(cur_parameter; sensitivity=0.1, num_points=7, deck=nothing)
+  @assert isodd(num_points)
 
   med_value = getfield(
-    Reactor(first(cur_T_bar_list), deck=deck),
+    Reactor(symbols(:T_bar), deck=deck),
     cur_parameter
   )
 
   min_value = med_value * ( 1.0 - sensitivity )
   max_value = med_value * ( 1.0 + sensitivity )
 
-  cur_values = collect(linspace(min_value, max_value, num_points))
+  parameter_list = collect(linspace(min_value, max_value, num_points))
 
-  cur_scans = []
+  cur_study = Study(
+    parameter_list, cur_parameter,
+    sensitivity, num_points, deck,
+    [], [], []
+  )
 
-  @showprogress 1 "Progress: " for cur_value in cur_values
+  for cur_value in parameter_list
+    println(cur_value)
     cur_dict = Dict()
     cur_dict[:deck] = deck
     cur_dict[cur_parameter] = cur_value
-    cur_dict[:ignored_limits] = [:kink, :wall, :heat]
-    cur_dict[:max_I_P] = 40
-    cur_dict[:no_pts_I_P] = 201
-    cur_dict[:verbose] = false
+    cur_dict[:constraint] = :beta
 
-    push!(cur_scans, Scan(cur_T_bar_list, :beta; cur_dict...))
-  end
+    tmp_reactor = Reactor(symbols(:T_bar), cur_dict)
 
-  cur_array = SharedArray{Float64}(num_points, 3)
-  fill!(cur_array, NaN)
+    cur_kink_reactor = match(tmp_reactor, :kink)
+    cur_wall_reactor = match(tmp_reactor, :wall)
 
-  cur_func = function (cur_index::Integer)
-    cur_array[cur_index, :] = study_scan(cur_scans[cur_index], cur_parameter)
-  end
+    ( cur_kink_reactor == nothing ) || push!(cur_study.kink_reactors, cur_kink_reactor)
+    ( cur_wall_reactor == nothing ) || push!(cur_study.wall_reactors, cur_wall_reactor)
 
-  cur_progress = Progress(num_points)
-  pmap(cur_func, cur_progress, shuffle(1:num_points))
+    cur_min_T = min_T_bar
+    cur_max_T = max_T_bar
 
-  cur_scan_reactors = [
-    cur_study.kink_reactors,
-    cur_study.cost_reactors,
-    cur_study.wall_reactors
-  ]
-
-  for (cur_index, cur_scan) in enumerate(cur_scans)
-    for (cur_sub_index, cur_T) in enumerate(cur_array[cur_index,:])
-      isnan(cur_T) && continue
-
-      tmp_reactor = deepcopy(cur_scan.beta_reactors[1])
-      tmp_reactor.T_bar = cur_T
-
-      cur_reactor_list = _get_raw_reactor_list(tmp_reactor, cur_parameter, [:heat])
-      filter!(cur_reactor -> cur_reactor.is_valid, cur_reactor_list)
-
-      @assert 1 <= cur_sub_index <= 3
-
-      if cur_sub_index == 2
-        cur_min_index = indmin(map(cur_reactor -> cur_reactor.cost, cur_reactor_list))
-      elseif cur_sub_index == 1
-        cur_min_index = indmin(map(cur_reactor -> abs( 1 - cur_reactor.norm_q_95 ), cur_reactor_list))
-      elseif cur_sub_index == 3
-        cur_min_index = indmin(map(cur_reactor -> abs( 1 - cur_reactor.norm_P_W ), cur_reactor_list))
-      end
-
-      push!(cur_scan_reactors[cur_sub_index], cur_reactor_list[cur_min_index])
+    if cur_kink_reactor != nothing && cur_wall_reactor != nothing
+      cur_min_T = min(cur_kink_reactor.T_bar, cur_wall_reactor.T_bar)
+      cur_max_T = max(cur_kink_reactor.T_bar, cur_wall_reactor.T_bar)
     end
+
+    cur_cost_reactor = find_min_cost_reactor(tmp_reactor, cur_min_T, cur_max_T)
+    ( cur_cost_reactor == nothing ) || push!(cur_study.cost_reactors, cur_cost_reactor)
   end
 
   cur_study
 end
 
-function study_scan(cur_scan::AbstractScan, cur_parameter::Symbol)
-  (kink_T, wall_T, min_T_list, max_T_list) = find_scan_borders(cur_scan, cur_parameter)
+function find_min_cost_reactor(cur_reactor::AbstractReactor, cur_min_T::Number, cur_max_T::Number; num_points::Int=16)
+  cur_T_list = collect(linspace(cur_min_T, cur_max_T, num_points))
+  out_in_reorder!(cur_T_list)
 
-  ( isempty(min_T_list) || isempty(max_T_list) ) && return [NaN, NaN, NaN]
+  min_cost_reactor = nothing
+  is_chasing_min = [true, true]
 
-  cost_T = find_scan_min(cur_scan, cur_parameter, min_T_list, max_T_list)
+  for (cur_index, cur_T) in enumerate(cur_T_list)
+    is_chasing_min[cur_index%2+1] || @assert cur_index > 2
+    is_chasing_min[cur_index%2+1] || continue
 
-  [kink_T, cost_T, wall_T]
-end
+    cur_reactor.T_bar = cur_T
+    work_reactor = find_low_cost_reactor(cur_reactor)
 
-function _process_scan_reactors!(cur_scan::AbstractScan, cur_parameter::Symbol)
-  cur_reactor_list = filter(cur_reactor -> cur_reactor.is_valid, cur_scan.beta_reactors)
-  isempty(cur_reactor_list) && return []
-
-  sort!(cur_reactor_list, by = cur_reactor -> cur_reactor.T_bar)
-
-  reactor_count = Int( 1 + ceil(length(cur_scan.beta_reactors)/4) )
-
-  beg_reactors = []
-  end_reactors = []
-
-  tmp_reactor = cur_reactor_list[1]
-
-  cur_dict = Dict()
-  cur_dict[:deck] = tmp_reactor.deck
-  cur_dict[cur_parameter] = getfield(tmp_reactor, cur_parameter)
-  cur_dict[:ignored_limits] = [:kink, :wall, :heat]
-  cur_dict[:max_I_P] = 40
-  cur_dict[:no_pts_I_P] = 201
-  cur_dict[:is_parallel] = false
-
-  min_T = first(cur_reactor_list).T_bar
-  max_T = last(cur_reactor_list).T_bar
-
-  if min_T != minimum(cur_scan.T_bar_list)
-    prev_T = sort(cur_scan.T_bar_list)[findfirst(cur_T -> cur_T == min_T, cur_scan.T_bar_list) - 1]
-    tmp_T_bar_list = collect(linspace(prev_T, min_T, reactor_count))[2:end]
-
-    beg_reactors = Scan(tmp_T_bar_list, :beta; cur_dict...).beta_reactors
-    filter!(cur_reactor -> cur_reactor.is_valid, beg_reactors)
-    sort!(beg_reactors, by = cur_reactor -> cur_reactor.T_bar)
-
-    this_reactor = beg_reactors[end]
-    that_reactor = cur_reactor_list[1]
-
-    @assert this_reactor.T_bar == min_T
-    @assert that_reactor.T_bar == min_T
-
-    cur_error = abs( this_reactor.R_0 - that_reactor.R_0 )
-    for work_reactor in cur_reactor_list[2:end]
-      ( work_reactor.T_bar == min_T ) || break
-
-      tmp_error = abs( this_reactor.R_0 - work_reactor.R_0 )
-      ( tmp_error < cur_error ) || continue
-
-      cur_error = tmp_error
-      that_reactor = work_reactor
+    if work_reactor == nothing
+      is_chasing_min[cur_index%2+1] = false
+      continue
     end
 
-    @assert isapprox(cur_error, 0.0, atol=1e-4)
-
-    cur_shift = ( that_reactor.branch_id - this_reactor.branch_id )
-
-    if !iszero(cur_shift)
-      for work_reactor in beg_reactors
-        work_reactor.branch_id += cur_shift
-      end
+    if min_cost_reactor == nothing || work_reactor.cost < min_cost_reactor.cost
+      min_cost_reactor = work_reactor
+      continue
     end
 
-    pop!(beg_reactors)
+    any(is_chasing_min) || break
+    is_chasing_min[cur_index%2+1] = false
   end
 
-  if max_T != maximum(cur_scan.T_bar_list)
-    next_T = sort(cur_scan.T_bar_list)[findfirst(cur_T -> cur_T == max_T, cur_scan.T_bar_list) + 1]
-    tmp_T_bar_list = collect(linspace(max_T, next_T, reactor_count))[1:end-1]
+  @assert min_cost_reactor != nothing
 
-    end_reactors = Scan(tmp_T_bar_list, :beta; cur_dict...).beta_reactors
-    woof = deepcopy(end_reactors)
-    filter!(cur_reactor -> cur_reactor.is_valid, end_reactors)
-    sort!(end_reactors, by = cur_reactor -> cur_reactor.T_bar)
+  ( min_cost_reactor.T_bar == cur_T_list[1] ) && return min_cost_reactor
+  ( min_cost_reactor.T_bar == cur_T_list[end] ) && return min_cost_reactor
 
-    this_reactor = end_reactors[1]
-    that_reactor = cur_reactor_list[end]
+  diff_T = ( cur_max_T - cur_min_T ) / ( num_points - 1.0 )
 
-    if this_reactor.T_bar != max_T || that_reactor.T_bar != max_T
-      println(111, " - ", this_reactor)
-      println(222, " - ", end_reactors)
-      println(202, " - ", woof)
-      println(333, " - ", cur_reactor_list)
-      println(444, " - ", max_T)
-    end
+  beg_T = min_cost_reactor.T_bar - diff_T
+  end_T = min_cost_reactor.T_bar + diff_T
 
-    @assert this_reactor.T_bar == max_T
-    @assert that_reactor.T_bar == max_T
+  cur_func = find_min_cost(cur_reactor)
 
-    cur_error = abs( this_reactor.R_0 - that_reactor.R_0 )
-    for work_reactor in reverse(cur_reactor_list)[2:end]
-      ( work_reactor.T_bar == max_T ) || break
-
-      tmp_error = abs( this_reactor.R_0 - work_reactor.R_0 )
-      ( tmp_error < cur_error ) || continue
-
-      cur_error = tmp_error
-      that_reactor = work_reactor
-    end
-
-    @assert isapprox(cur_error, 0.0, atol=1e-4)
-
-    cur_shift = ( that_reactor.branch_id - this_reactor.branch_id )
-
-    if !iszero(cur_shift)
-      for work_reactor in end_reactors
-        work_reactor.branch_id += cur_shift
-      end
-    end
-
-    shift!(end_reactors)
-  end
-
-  prepend!(cur_reactor_list, beg_reactors)
-  append!(cur_reactor_list, end_reactors)
-
-  cur_branch_list = map(cur_reactor -> cur_reactor.branch_id, cur_reactor_list)
-  uniq_branch_list = unique(cur_branch_list)
-
-  min_branch_id = minimum(cur_branch_list)
-  max_branch_id = maximum(cur_branch_list)
-
-  if min_branch_id != 1
-    cur_shift = ( 1 - min_branch_id )
-    max_branch_id += cur_shift
-
-    for work_reactor in cur_reactor_list
-      work_reactor.branch_id += cur_shift
-    end
-  end
-
-  @assert max_branch_id == length(uniq_branch_list)
-  @assert max_branch_id < 3
-
-  cur_reactor_list
-end
-
-function find_scan_borders(cur_scan::Scan, cur_parameter::Symbol)
-  cur_reactor_list = _process_scan_reactors!(cur_scan, cur_parameter)
-
-  valid_reactors = filter(
-    cur_reactor -> ( cur_reactor.norm_q_95 <= 1 && cur_reactor.norm_P_W <= 1 ),
-    cur_reactor_list
+  cur_min_cost_T = Optim.minimizer(
+    optimize(cur_func, beg_T, end_T; rel_tol=1e-1)
   )
 
-  iszero(length(valid_reactors)) && return [NaN, NaN, [], []]
+  cur_reactor.T_bar = cur_min_cost_T
+  work_reactor = find_low_cost_reactor(cur_reactor)
 
-  min_T_list = []
-  max_T_list = []
+  @assert work_reactor != nothing
 
-  max_branch_id = maximum(map(cur_reactor -> cur_reactor.branch_id, cur_reactor_list))
+  min_cost_reactor = work_reactor
 
-  for cur_branch_id in 1:max_branch_id
-    work_T_bar_list = map(
-      cur_reactor -> cur_reactor.T_bar,
-      filter(work_reactor -> ( work_reactor.branch_id == cur_branch_id ), valid_reactors)
-    )
-
-    if isempty(work_T_bar_list)
-      push!(min_T_list, NaN)
-      push!(max_T_list, NaN)
-    else
-      push!(min_T_list, minimum(work_T_bar_list))
-      push!(max_T_list, maximum(work_T_bar_list))
-    end
-  end
-
-  bad_kink_reactors = filter(
-    cur_reactor -> ( cur_reactor.norm_q_95 > 1 && cur_reactor.norm_P_W <= 1 ),
-    cur_reactor_list
-  )
-
-  bad_wall_reactors = filter(
-    cur_reactor -> ( cur_reactor.norm_q_95 <= 1 && cur_reactor.norm_P_W > 1 ),
-    cur_reactor_list
-  )
-
-  valid_branch_list = map(cur_reactor -> cur_reactor.branch_id, valid_reactors)
-
-  if !isempty(bad_kink_reactors)
-    bad_kink_branch_list = map(cur_reactor -> cur_reactor.branch_id, bad_kink_reactors)
-    filter!(tmp_branch_id -> in(tmp_branch_id, valid_branch_list), bad_kink_branch_list)
-
-    if isempty(bad_kink_branch_list)
-      empty!(bad_kink_reactors)
-    else
-      ( length(unique(bad_kink_branch_list)) == 1 ) || println("~~~" , bad_kink_reactors)
-      @assert length(unique(bad_kink_branch_list)) == 1
-      bad_kink_branch_id = bad_kink_branch_list[1]
-      filter!(cur_reactor -> cur_reactor.branch_id == bad_kink_branch_id, bad_kink_reactors)
-
-      bad_kink_T_bar_list = map(cur_reactor -> cur_reactor.T_bar, bad_kink_reactors)
-      min_bad_kink_T = minimum(bad_kink_T_bar_list)
-      max_bad_kink_T = maximum(bad_kink_T_bar_list)
-    end
-  end
-
-  if !isempty(bad_wall_reactors)
-    bad_wall_branch_list = map(cur_reactor -> cur_reactor.branch_id, bad_wall_reactors)
-    filter!(tmp_branch_id -> in(tmp_branch_id, valid_branch_list), bad_wall_branch_list)
-
-    if isempty(bad_wall_branch_list)
-      empty!(bad_wall_reactors)
-    else
-      ( length(unique(bad_wall_branch_list)) == 1 ) || println("___" , bad_wall_reactors)
-      @assert length(unique(bad_wall_branch_list)) == 1
-      bad_wall_branch_id = bad_wall_branch_list[1]
-      filter!(cur_reactor -> cur_reactor.branch_id == bad_wall_branch_id, bad_wall_reactors)
-
-      bad_wall_T_bar_list = map(cur_reactor -> cur_reactor.T_bar, bad_wall_reactors)
-      min_bad_wall_T = minimum(bad_wall_T_bar_list)
-      max_bad_wall_T = maximum(bad_wall_T_bar_list)
-    end
-  end
-
-  kink_T = NaN
-  wall_T = NaN
-
-  if !isempty(bad_kink_reactors)
-    kink_T_func = find_beta_kink_intersection(valid_reactors[1], cur_parameter, bad_kink_branch_id)
-
-    if !isnan(min_T_list[bad_kink_branch_id])
-      if ( max_bad_kink_T < min_T_list[bad_kink_branch_id] )
-        kink_T_guesses = (max_bad_kink_T, min_T_list[bad_kink_branch_id])
-        kink_T = find_zero(kink_T_func, kink_T_guesses, FalsePosition())
-        min_T_list[bad_kink_branch_id] = kink_T
-      else
-        kink_T_guesses = (max_T_list[bad_kink_branch_id], min_bad_kink_T)
-        kink_T = find_zero(kink_T_func, kink_T_guesses, FalsePosition())
-        max_T_list[bad_kink_branch_id] = kink_T
-      end
-    end
-  end
-
-  if !isempty(bad_wall_reactors)
-    wall_T_func = find_beta_wall_intersection(valid_reactors[1], cur_parameter, bad_wall_branch_id)
-
-    if !isnan(min_T_list[bad_wall_branch_id])
-      if ( max_bad_wall_T < min_T_list[bad_wall_branch_id] )
-        wall_T_guesses = (max_bad_wall_T, min_T_list[bad_wall_branch_id])
-        wall_T = find_zero(wall_T_func, wall_T_guesses, FalsePosition())
-        min_T_list[bad_wall_branch_id] = wall_T
-      else
-        wall_T_guesses = (max_T_list[bad_wall_branch_id], min_bad_wall_T)
-        wall_T = find_zero(wall_T_func, wall_T_guesses, FalsePosition())
-        max_T_list[bad_wall_branch_id] = wall_T
-      end
-    end
-  end
-
-  return (kink_T, wall_T, min_T_list, max_T_list)
+  min_cost_reactor
 end
 
-function find_scan_min(cur_scan::Scan, cur_parameter::Symbol, min_T_list::Vector, max_T_list::Vector)
-  sample_reactor = first(cur_scan.beta_reactors)
-
-  work_T_list = []
-
-  for (cur_branch_id, (cur_min_T, cur_max_T)) in enumerate(zip(min_T_list, max_T_list))
-    ( isnan(cur_min_T) || isnan(cur_max_T) ) && continue
-
-    cur_func = find_min_cost(sample_reactor, cur_parameter, cur_branch_id)
-
-    push!(work_T_list, Optim.minimizer(optimize(cur_func, cur_min_T, cur_max_T, rel_tol=3e-3)))
-  end
-
-  cur_cost = Inf
-  cost_T = NaN
-
-  append!(work_T_list, min_T_list)
-  append!(work_T_list, max_T_list)
-
-  work_T_list = unique(work_T_list)
-  filter!(!isnan, work_T_list)
-
-  for cur_T in unique([ work_T_list..., min_T_list... , max_T_list... ])
-    tmp_reactor = deepcopy(sample_reactor)
-    tmp_reactor.T_bar = cur_T
-    cur_reactor_list = _get_raw_reactor_list(tmp_reactor, cur_parameter, [:heat])
-
-    filter!(cur_reactor -> cur_reactor.is_valid, cur_reactor_list)
-    isempty(cur_reactor_list) && continue
-
-    tmp_cost = minimum(map(work_reactor -> work_reactor.cost, cur_reactor_list))
-    ( tmp_cost < cur_cost ) || continue
-
-    cur_cost = tmp_cost
-    cost_T = cur_T
-  end
-
-  cost_T
-end
-
-function find_min_cost(cur_reactor::AbstractReactor, cur_parameter::Symbol, cur_branch_id::Int)
+function find_min_cost(cur_reactor::AbstractReactor)
   cur_func = function(cur_T::Real)
     tmp_reactor = deepcopy(cur_reactor)
 
     tmp_reactor.T_bar = cur_T
 
-    cur_reactor_list = _get_raw_reactor_list(tmp_reactor, cur_parameter, [:heat])
+    tmp_reactor = find_low_cost_reactor(tmp_reactor)
 
-    filter!(
-      cur_reactor -> cur_reactor.is_valid,
-      cur_reactor_list
-    )
+    ( tmp_reactor == nothing ) && return NaN
 
-    work_reactor = cur_reactor_list[min(length(cur_reactor_list),abs(cur_branch_id))]
-
-    cur_cost = work_reactor.cost
+    cur_cost = tmp_reactor.cost
 
     cur_cost
   end
@@ -408,75 +133,23 @@ function find_min_cost(cur_reactor::AbstractReactor, cur_parameter::Symbol, cur_
   cur_func
 end
 
-function find_beta_wall_intersection(cur_reactor::AbstractReactor, cur_parameter::Symbol, cur_branch_id::Int)
-  cur_func = function(cur_T::Real)
-    tmp_reactor = deepcopy(cur_reactor)
+function find_low_cost_reactor(cur_reactor::AbstractReactor)
+  cur_I_P_list = solve(cur_reactor)
 
-    tmp_reactor.T_bar = cur_T
-
-    cur_reactor_list = _get_raw_reactor_list(tmp_reactor, cur_parameter, [:heat, :wall])
-
-    filter!(
-      cur_reactor -> cur_reactor.is_valid,
-      cur_reactor_list
-    )
-
-    work_reactor = cur_reactor_list[min(length(cur_reactor_list),abs(cur_branch_id))]
-
-    cur_error = ( 1.0 - work_reactor.norm_P_W )
-
-    cur_error
-  end
-
-  cur_func
-end
-
-function find_beta_kink_intersection(cur_reactor::AbstractReactor, cur_parameter::Symbol, cur_branch_id::Int)
-  cur_func = function(cur_T::Real)
-    tmp_reactor = deepcopy(cur_reactor)
-
-    tmp_reactor.T_bar = cur_T
-
-    cur_reactor_list = _get_raw_reactor_list(tmp_reactor, cur_parameter, [:heat, :kink])
-
-    filter!(
-      cur_reactor -> cur_reactor.is_valid,
-      cur_reactor_list
-    )
-
-    work_reactor = cur_reactor_list[min(length(cur_reactor_list),abs(cur_branch_id))]
-
-    cur_error = ( 1.0 - work_reactor.norm_q_95 )
-
-    cur_error
-  end
-
-  cur_func
-end
-
-function _get_raw_reactor_list(cur_reactor::AbstractReactor, cur_parameter::Symbol, ignored_limits::Vector)
-  tmp_reactor = Reactor(
-    cur_reactor.T_bar,
-    deck = cur_reactor.deck,
-    constraint = :beta,
-    ignored_limits = ignored_limits
-  )
-
-  setfield!(
-    tmp_reactor, cur_parameter,
-    getfield(cur_reactor, cur_parameter)
-  )
-
-  cur_I_P_list = solve(tmp_reactor)
-
-  cur_reactor_list = []
+  min_cost_reactor = nothing
+  min_cost = Inf
 
   for cur_I_P in cur_I_P_list
-    work_reactor = deepcopy(tmp_reactor)
-    work_reactor.I_P = cur_I_P
+    tmp_reactor = deepcopy(cur_reactor)
+    tmp_reactor.I_P = cur_I_P
+    update!(tmp_reactor)
 
-    push!(cur_reactor_list, update!(work_reactor))
+    tmp_reactor.is_valid || continue
+    ( tmp_reactor.cost < min_cost ) || continue
+
+    min_cost_reactor = tmp_reactor
+    min_cost = tmp_reactor.cost
   end
 
-  cur_reactor_list
+  min_cost_reactor
 end

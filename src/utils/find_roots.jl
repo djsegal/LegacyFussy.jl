@@ -135,6 +135,7 @@ function find_bisection_roots(f, cur_range::AbstractVector{T}, abstol::Real, rel
 
     for (cur_index, cur_sign) in enumerate(cur_signs)
         isinf(cur_sign) && continue
+        isnan(cur_sign) && continue
 
         cur_a, cur_b = cur_range[cur_index:cur_index+1]
 
@@ -149,7 +150,13 @@ function find_bisection_roots(f, cur_range::AbstractVector{T}, abstol::Real, rel
 
         ( cur_sign > 0 ) && continue
 
-        push!(root_list, find_zero(f, [cur_a, cur_b], Bisection()))
+        try
+          push!(root_list, find_zero(f, [cur_a, cur_b], FalsePosition()))
+        catch
+          cur_root = custom_bisection(f, cur_a, cur_b; abstol=abstol)
+          isnan(cur_root) && continue
+          push!(root_list, cur_root)
+        end
     end
 
     root_list
@@ -192,4 +199,34 @@ function loose_isapprox(first_value, second_value, atol, rtol)
   isapprox(first_value, second_value, rtol=rtol) && return true
 
   false
+end
+
+@inline custom_bisect(cur_a, cur_b) = ( cur_a + cur_b ) / 2.0
+
+function custom_bisection(f, cur_a_, cur_b_; abstol = 2*eps(promote_type(typeof(cur_b_),Float64)(cur_b_)))
+  cur_c = custom_bisect(cur_a_, cur_b_)
+  cur_f_c = f(cur_c)
+
+  if f(cur_c) > 0
+      cur_b = cur_c
+      cur_a = typeof(cur_b)(cur_a_)
+  else
+      cur_a = cur_c
+      cur_b = typeof(cur_a)(cur_b_)
+  end
+
+  while abs(cur_a - cur_b) > abstol
+    cur_c = custom_bisect(cur_a, cur_b)
+    cur_f_c = f(cur_c)
+
+    if cur_f_c > 0
+      cur_b = cur_c
+    else
+      cur_a = cur_c
+    end
+  end
+
+  isapprox(cur_f_c, 0.0, atol=abstol) || return NaN
+
+  cur_c
 end
