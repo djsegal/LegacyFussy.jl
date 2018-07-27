@@ -1,15 +1,11 @@
-function hone(cur_reactor::AbstractReactor, cur_constraint::Symbol; reltol::Number=3e-3)
-  cur_reactor.constraint = :beta
+function hone(cur_reactor::AbstractReactor, cur_constraint::Symbol; reltol::Number=3e-3, max_attempts::Int = 10)
+  @assert cur_reactor.constraint == :beta
 
   prev_T = nothing
   prev_eta_CD = nothing
-
-  max_attempts = 10
   cur_error = NaN
 
   for cur_index in 1:max_attempts
-    println(cur_index*10)
-
     prev_T = cur_reactor.T_bar
     prev_eta_CD = cur_reactor.eta_CD
 

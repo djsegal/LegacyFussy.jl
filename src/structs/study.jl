@@ -31,31 +31,152 @@ function Study(cur_parameter; sensitivity=0.1, num_points=7, deck=nothing)
     [], [], []
   )
 
-  for cur_value in parameter_list
-    println(cur_value)
-    cur_dict = Dict()
-    cur_dict[:deck] = deck
-    cur_dict[cur_parameter] = cur_value
-    cur_dict[:constraint] = :beta
+  cur_dict = Dict()
+  cur_dict[:deck] = deck
+  cur_dict[:constraint] = :beta
 
-    tmp_reactor = Reactor(symbols(:T_bar), cur_dict)
+  cur_reactor = Reactor(symbols(:T_bar), cur_dict)
 
-    cur_kink_reactor = match(tmp_reactor, :kink)
-    cur_wall_reactor = match(tmp_reactor, :wall)
+  if cur_reactor.is_pulsed || !cur_reactor.is_consistent
+    cur_array = SharedArray{Float64}(num_points, 3)
+    fill!(cur_array, NaN)
 
-    ( cur_kink_reactor == nothing ) || push!(cur_study.kink_reactors, cur_kink_reactor)
-    ( cur_wall_reactor == nothing ) || push!(cur_study.wall_reactors, cur_wall_reactor)
+    cur_func = function (cur_index::Integer)
+      tmp_dict = deepcopy(cur_dict)
+      tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+      tmp_reactor = Reactor(symbols(:T_bar), tmp_dict)
+
+      cur_kink_reactor = match(tmp_reactor, :kink)
+
+      ( cur_kink_reactor == nothing ) && return
+
+      cur_array[cur_index,1] = cur_kink_reactor.T_bar
+      cur_array[cur_index,2] = cur_kink_reactor.I_P
+      cur_array[cur_index,3] = cur_kink_reactor.eta_CD
+    end
+
+    cur_progress = Progress(num_points)
+    pmap(cur_func, cur_progress, shuffle(1:num_points))
+
+    for (cur_index, cur_value) in enumerate(parameter_list)
+      cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
+
+      isnan(cur_eta_CD) && continue
+      isnan(cur_T_bar) && continue
+      isnan(cur_I_P) && continue
+
+      tmp_dict = deepcopy(cur_dict)
+      tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+      work_reactor = Reactor(cur_T_bar, tmp_dict)
+      work_reactor.I_P = cur_I_P
+      work_reactor.eta_CD = cur_eta_CD
+
+      push!(cur_study.kink_reactors, update!(work_reactor))
+    end
+  end
+
+  cur_array = SharedArray{Float64}(num_points, 3)
+  fill!(cur_array, NaN)
+
+  cur_func = function (cur_index::Integer)
+    tmp_dict = deepcopy(cur_dict)
+    tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+    tmp_reactor = Reactor(symbols(:T_bar), tmp_dict)
+
+    if tmp_reactor.is_consistent
+      cur_wall_reactor = hone(tmp_reactor, :wall)
+    else
+      cur_wall_reactor = match(tmp_reactor, :wall)
+    end
+
+    ( cur_wall_reactor == nothing ) && return
+
+    cur_array[cur_index,1] = cur_wall_reactor.T_bar
+    cur_array[cur_index,2] = cur_wall_reactor.I_P
+    cur_array[cur_index,3] = cur_wall_reactor.eta_CD
+  end
+
+  cur_progress = Progress(num_points)
+  pmap(cur_func, cur_progress, shuffle(1:num_points))
+
+  for (cur_index, cur_value) in enumerate(parameter_list)
+    cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
+
+    isnan(cur_eta_CD) && continue
+    isnan(cur_T_bar) && continue
+    isnan(cur_I_P) && continue
+
+    tmp_dict = deepcopy(cur_dict)
+    tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+    work_reactor = Reactor(cur_T_bar, tmp_dict)
+    work_reactor.I_P = cur_I_P
+    work_reactor.eta_CD = cur_eta_CD
+
+    push!(cur_study.wall_reactors, update!(work_reactor))
+  end
+
+  cur_array = SharedArray{Float64}(num_points, 3)
+  fill!(cur_array, NaN)
+
+  cur_func = function (cur_index::Integer)
+    tmp_value = parameter_list[cur_index]
+
+    tmp_dict = deepcopy(cur_dict)
+    tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+    tmp_reactor = Reactor(symbols(:T_bar), tmp_dict)
+
+    cur_kink_reactor_index = findfirst(
+      tmp_kink_reactor -> getfield(tmp_kink_reactor, cur_parameter) == parameter_list[cur_index],
+      cur_study.kink_reactors
+    )
+
+    cur_wall_reactor_index = findfirst(
+      tmp_wall_reactor -> getfield(tmp_wall_reactor, cur_parameter) == parameter_list[cur_index],
+      cur_study.wall_reactors
+    )
 
     cur_min_T = min_T_bar
     cur_max_T = max_T_bar
 
-    if cur_kink_reactor != nothing && cur_wall_reactor != nothing
+    if !( iszero(cur_kink_reactor_index) || iszero(cur_wall_reactor_index) )
+      cur_kink_reactor = cur_study.kink_reactors[cur_kink_reactor_index]
+      cur_wall_reactor = cur_study.wall_reactors[cur_wall_reactor_index]
+
       cur_min_T = min(cur_kink_reactor.T_bar, cur_wall_reactor.T_bar)
       cur_max_T = max(cur_kink_reactor.T_bar, cur_wall_reactor.T_bar)
     end
 
     cur_cost_reactor = find_min_cost_reactor(tmp_reactor, cur_min_T, cur_max_T)
-    ( cur_cost_reactor == nothing ) || push!(cur_study.cost_reactors, cur_cost_reactor)
+    ( cur_cost_reactor == nothing ) && return
+
+    cur_array[cur_index,1] = cur_cost_reactor.T_bar
+    cur_array[cur_index,2] = cur_cost_reactor.I_P
+    cur_array[cur_index,3] = cur_cost_reactor.eta_CD
+  end
+
+  cur_progress = Progress(num_points)
+  pmap(cur_func, cur_progress, shuffle(1:num_points))
+
+  for (cur_index, cur_value) in enumerate(parameter_list)
+    cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
+
+    isnan(cur_eta_CD) && continue
+    isnan(cur_T_bar) && continue
+    isnan(cur_I_P) && continue
+
+    tmp_dict = deepcopy(cur_dict)
+    tmp_dict[cur_parameter] = parameter_list[cur_index]
+
+    work_reactor = Reactor(cur_T_bar, tmp_dict)
+    work_reactor.I_P = cur_I_P
+    work_reactor.eta_CD = cur_eta_CD
+
+    push!(cur_study.cost_reactors, update!(work_reactor))
   end
 
   cur_study
@@ -89,7 +210,7 @@ function find_min_cost_reactor(cur_reactor::AbstractReactor, cur_min_T::Number, 
     is_chasing_min[cur_index%2+1] = false
   end
 
-  @assert min_cost_reactor != nothing
+  ( min_cost_reactor == nothing ) && return nothing
 
   ( min_cost_reactor.T_bar == cur_T_list[1] ) && return min_cost_reactor
   ( min_cost_reactor.T_bar == cur_T_list[end] ) && return min_cost_reactor
@@ -99,7 +220,14 @@ function find_min_cost_reactor(cur_reactor::AbstractReactor, cur_min_T::Number, 
   beg_T = min_cost_reactor.T_bar - diff_T
   end_T = min_cost_reactor.T_bar + diff_T
 
-  cur_func = find_min_cost(cur_reactor)
+  cur_func = function(cur_T::Real)
+    tmp_reactor = deepcopy(cur_reactor)
+    tmp_reactor.T_bar = cur_T
+    tmp_reactor = find_low_cost_reactor(tmp_reactor)
+
+    ( tmp_reactor == nothing ) && return NaN
+    tmp_reactor.cost
+  end
 
   cur_min_cost_T = Optim.minimizer(
     optimize(cur_func, beg_T, end_T; rel_tol=1e-1)
@@ -108,29 +236,11 @@ function find_min_cost_reactor(cur_reactor::AbstractReactor, cur_min_T::Number, 
   cur_reactor.T_bar = cur_min_cost_T
   work_reactor = find_low_cost_reactor(cur_reactor)
 
-  @assert work_reactor != nothing
+  ( work_reactor == nothing ) && return min_cost_reactor
 
   min_cost_reactor = work_reactor
 
   min_cost_reactor
-end
-
-function find_min_cost(cur_reactor::AbstractReactor)
-  cur_func = function(cur_T::Real)
-    tmp_reactor = deepcopy(cur_reactor)
-
-    tmp_reactor.T_bar = cur_T
-
-    tmp_reactor = find_low_cost_reactor(tmp_reactor)
-
-    ( tmp_reactor == nothing ) && return NaN
-
-    cur_cost = tmp_reactor.cost
-
-    cur_cost
-  end
-
-  cur_func
 end
 
 function find_low_cost_reactor(cur_reactor::AbstractReactor)
