@@ -15,12 +15,7 @@ function match(cur_reactor::AbstractReactor, cur_constraint::Symbol)
 
     cur_error -= calc_I_P(tmp_reactor)
 
-    tmp_I_P = NaN
-    # try
-      tmp_I_P = calc_I_P(tmp_reactor, cur_constraint)
-    # catch
-    #   return NaN
-    # end
+    tmp_I_P = calc_I_P(tmp_reactor, cur_constraint)
 
     cur_error = subs(
       cur_error,
@@ -30,6 +25,8 @@ function match(cur_reactor::AbstractReactor, cur_constraint::Symbol)
     )
 
     cur_error = real(float(cur_error))
+
+    println(cur_error)
 
     cur_error
   end

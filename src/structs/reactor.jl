@@ -114,8 +114,8 @@
 
   constraint::AbstractKey = nothing
 
-  skipped_limits::Vector{Symbol} = []
-  ignored_limits::Vector{Symbol} = [:pcap, :heat]
+  skipped_limits::Vector{Symbol} = [:pcap]
+  ignored_limits::Vector{Symbol} = [:heat]
 
   branch_id::Int = 1
 
@@ -137,12 +137,11 @@ function _Reactor!(cur_reactor::AbstractReactor, cur_kwargs::Dict)
     setfield!(cur_reactor, cur_key, cur_value)
   end
 
+  isa(cur_reactor.f_D, AbstractFloat) &&
+    @assert( cur_reactor.f_D <= 1 )
+
   if !cur_reactor.is_pulsed
     cur_reactor.tau_FT = 1.6e9
-  end
-
-  if cur_reactor.is_consistent
-    cur_reactor.eta_CD = eta_CD_sym
   end
 
   if cur_reactor.constraint == nothing
@@ -155,10 +154,16 @@ function _Reactor!(cur_reactor::AbstractReactor, cur_kwargs::Dict)
 
   isa(cur_reactor.kappa_95, AbstractFloat) || return
 
+  @assert (
+    !isa(cur_reactor.l_i, SymEngine.Basic) ||
+    !isa(cur_reactor.gamma, SymEngine.Basic) ||
+    !isa(cur_reactor.rho_m, SymEngine.Basic)
+  )
+
   if isa(cur_reactor.l_i, SymEngine.Basic)
     if isa(cur_reactor.rho_m, AbstractFloat)
       isa(cur_reactor.gamma, SymEngine.Basic) &&
-        ( cur_reactor.gamma = 1 / ( 1 - cur_reactor.rho_m ) )
+        ( cur_reactor.gamma = 1 / ( 1 - cur_reactor.rho_m ^ 2 ) )
     end
 
     cur_reactor.l_i = int_b_p(cur_reactor.gamma)
@@ -184,11 +189,13 @@ function _Reactor!(cur_reactor::AbstractReactor, cur_kwargs::Dict)
 
       iszero(cur_gamma) || break
     end
+
     cur_reactor.gamma = cur_gamma
   end
 
   if isa(cur_reactor.rho_m, SymEngine.Basic)
     cur_gamma = cur_reactor.gamma
+
     if cur_gamma < 1
       cur_reactor.rho_m = 0.0
     else
@@ -287,10 +294,12 @@ function SymbolicReactor(cur_temp::AbstractSymbol=symbols(:T_bar); cur_kwargs...
   cur_reactor
 end
 
-function BaseReactor(cur_temp::AbstractSymbol=symbols(:T_bar); cur_kwargs...)
-  cur_dict = merge!(Dict(), Dict(cur_kwargs))
+function BaseReactor(cur_dict::Dict)
+  @assert haskey(cur_dict, :T_bar)
 
-  cur_reactor = Reactor(T_bar = cur_temp)
+  cur_T_bar = cur_dict[:T_bar]
+
+  cur_reactor = Reactor(T_bar = cur_T_bar)
 
   _SymbolizeReactor!(cur_reactor)
 
@@ -301,6 +310,12 @@ function BaseReactor(cur_temp::AbstractSymbol=symbols(:T_bar); cur_kwargs...)
   _Reactor!(cur_reactor, cur_dict)
 
   cur_reactor
+end
+
+function BaseReactor(cur_temp::AbstractSymbol=symbols(:T_bar); cur_kwargs...)
+  cur_dict = merge!(Dict(), Dict(cur_kwargs))
+
+  BaseReactor(cur_dict)
 end
 
 Reactor(cur_temp::Number; cur_kwargs...) =
