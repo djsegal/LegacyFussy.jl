@@ -9,9 +9,9 @@
 
   cur_K /= cur_reactor.epsilon ^ 2
 
-  cur_K *= gamma( cur_nu_n + 3/2 )
+  cur_K *= Base.gamma( cur_nu_n + 3/2 )
 
-  cur_K /= gamma( cur_nu_n + 2.0 )
+  cur_K /= Base.gamma( cur_nu_n + 2.0 )
 
   cur_K
 end

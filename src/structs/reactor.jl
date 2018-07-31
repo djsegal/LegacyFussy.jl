@@ -160,24 +160,18 @@ function _Reactor!(cur_reactor::AbstractReactor, cur_kwargs::Dict)
   if isa(cur_reactor.l_i, SymEngine.Basic)
     if isa(cur_reactor.rho_m, AbstractFloat)
       isa(cur_reactor.gamma, SymEngine.Basic) &&
-        ( cur_reactor.gamma = 1 / ( 1 - cur_reactor.rho_m ) )
+        ( cur_reactor.gamma = gamma(cur_reactor) )
     end
 
-    cur_reactor.l_i = int_b_p(cur_reactor.gamma)
-    cur_reactor.l_i /= 1 + cur_reactor.kappa_95 ^ 2
-    cur_reactor.l_i *= 4 * cur_reactor.kappa_95
+    cur_reactor.l_i = l_i(cur_reactor)
   end
 
   if isa(cur_reactor.gamma, SymEngine.Basic)
-    cur_lhs = cur_reactor.l_i
-    cur_lhs *= 1 + cur_reactor.kappa_95 ^ 2
-    cur_lhs /= 4 * cur_reactor.kappa_95
-
     cur_gamma = NaN
     for cur_attempt in 1:100
       try
         cur_gamma = fzero(
-          tmp_gamma -> int_b_p(tmp_gamma) - cur_lhs,
+          tmp_gamma -> cur_reactor.l_i - l_i(cur_reactor, tmp_gamma),
           rand()
         )
       catch

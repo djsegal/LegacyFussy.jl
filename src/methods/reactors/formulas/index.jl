@@ -33,3 +33,6 @@ include("omega_ce.jl")
 include("omega_pe.jl")
 
 include("plasma_parameter.jl")
+
+include("l_i.jl")
+include("gamma.jl")

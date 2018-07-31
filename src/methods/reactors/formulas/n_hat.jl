@@ -5,9 +5,9 @@
 
   cur_n *= sqrt( cur_reactor.pi )
 
-  cur_n *= gamma( cur_nu_n + 2.0 )
+  cur_n *= Base.gamma( cur_nu_n + 2.0 )
 
-  cur_n /= gamma( cur_nu_n + 3/2 )
+  cur_n /= Base.gamma( cur_nu_n + 3/2 )
 
   cur_n *= cur_reactor.n_bar
 
