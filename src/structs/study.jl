@@ -2,6 +2,8 @@ mutable struct Study <: AbstractStudy
   parameter_list::Vector{AbstractFloat}
 
   parameter::Symbol
+
+  default::Real
   sensitivity::Real
   num_points::Int
 
@@ -33,7 +35,8 @@ function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_k
 
   cur_study = Study(
     parameter_list, cur_parameter,
-    sensitivity, num_points, deck,
+    med_value, sensitivity,
+    num_points, deck,
     [], [], []
   )
 

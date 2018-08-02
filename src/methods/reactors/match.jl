@@ -26,8 +26,6 @@ function match(cur_reactor::AbstractReactor, cur_constraint::Symbol)
 
     cur_error = real(float(cur_error))
 
-    println(cur_error)
-
     cur_error
   end
 

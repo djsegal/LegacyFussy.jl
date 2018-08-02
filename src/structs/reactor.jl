@@ -140,6 +140,12 @@ function _Reactor!(cur_reactor::AbstractReactor, cur_kwargs::Dict)
   isa(cur_reactor.f_D, AbstractFloat) &&
     @assert( cur_reactor.f_D <= 1 )
 
+  isa(cur_reactor.N_G, AbstractFloat) &&
+    @assert( cur_reactor.N_G > 0 )
+
+  isa(cur_reactor.epsilon, AbstractFloat) &&
+    @assert( cur_reactor.epsilon > 0 )
+
   if !cur_reactor.is_pulsed
     cur_reactor.tau_FT = 1.6e9
   end
