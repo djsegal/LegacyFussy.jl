@@ -59,18 +59,9 @@ end
 
   cur_n = _n_para_2(cur_reactor, cur_rho)
 
-  cur_equation = diff(cur_n, cur_rho)
-
-  cur_roots = find_roots(
-    cur_equation, min_rho, max_rho,
-    no_pts=no_pts_rho, abstol = 1e-4
-  )
-
-  isempty(cur_roots) && return NaN
-
-  cur_extrema = map(cur_root -> _n_para_2(cur_reactor, cur_root), cur_roots)
-
-  solved_rho = cur_roots[indmax(cur_extrema)]
+  solved_rho = optimize(
+    lambdify(-cur_n), min_rho, max_rho
+  ).minimizer
 
   solved_rho
 end
