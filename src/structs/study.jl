@@ -14,24 +14,45 @@ mutable struct Study <: AbstractStudy
   wall_reactors::Vector{AbstractReactor}
 end
 
-function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_kwargs...)
-  cur_dict = merge!(Dict(), Dict(cur_kwargs))
+function Study(cur_parameter, init_dict=Dict(); sensitivity=0.2, num_points=9, verbose::Bool=true, is_parallel::Bool=true, skip_center::Bool=false, deck=nothing, cur_kwargs...)
+  cur_dict = deepcopy(init_dict)
+
+  merge!(cur_dict, Dict(cur_kwargs))
 
   cur_is_fast = haskey(cur_dict, :is_fast) && cur_dict[:is_fast]
+  cur_is_light = haskey(cur_dict, :is_light) && cur_dict[:is_light]
 
   delete!(cur_dict, :is_fast)
+  delete!(cur_dict, :is_light)
 
   @assert isodd(num_points)
 
-  med_value = getfield(
-    Reactor(symbols(:T_bar), deck=deck),
-    cur_parameter
-  )
+  if haskey(cur_dict, :deck)
+    ( deck == nothing ) &&
+      ( deck = cur_dict[:deck] )
+  else
+    cur_dict[:deck] = deck
+  end
 
-  min_value = med_value * ( 1.0 - sensitivity )
-  max_value = med_value * ( 1.0 + sensitivity )
+  cur_dict[:constraint] = :beta
 
-  parameter_list = collect(linspace(min_value, max_value, num_points))
+  cur_reactor = Reactor(symbols(:T_bar), cur_dict)
+
+  med_value = getfield(cur_reactor, cur_parameter)
+
+  if num_points == 1
+    parameter_list = [med_value]
+  else
+    min_value = med_value * ( 1.0 - sensitivity )
+    max_value = med_value * ( 1.0 + sensitivity )
+
+    parameter_list = collect(linspace(min_value, max_value, num_points))
+  end
+
+  if skip_center
+    deleteat!(parameter_list, 1+Int((num_points-1)/2))
+    num_points -= 1
+  end
 
   cur_study = Study(
     parameter_list, cur_parameter,
@@ -39,11 +60,6 @@ function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_k
     num_points, deck,
     [], [], []
   )
-
-  cur_dict[:deck] = deck
-  cur_dict[:constraint] = :beta
-
-  cur_reactor = Reactor(symbols(:T_bar), cur_dict)
 
   if haskey(cur_dict, :is_consistent) && cur_dict[:is_consistent]
     tmp_dict = deepcopy(cur_dict)
@@ -58,57 +74,60 @@ function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_k
     tmp_dict = deepcopy(cur_dict)
     tmp_dict[cur_parameter] = cur_value
 
-    try
-      other_reactor = Reactor(symbols(:T_bar), tmp_dict)
-    catch cur_error
-      isa(cur_error, AssertionError) || rethrow(cur_error)
-      push!(cur_bad_indices, cur_index)
-    end
+    other_reactor = Reactor(symbols(:T_bar), tmp_dict)
+    ( other_reactor.is_good ) || push!(cur_bad_indices, cur_index)
   end
 
   num_points -= length(cur_bad_indices)
   deleteat!(parameter_list, cur_bad_indices)
 
-  cur_array = SharedArray{Float64}(num_points, 3)
-  fill!(cur_array, NaN)
+  if !cur_is_light
+    cur_array = SharedArray{Float64}(num_points, 3)
+    fill!(cur_array, NaN)
 
-  cur_func = function (cur_index::Integer)
-    tmp_dict = deepcopy(cur_dict)
-    tmp_dict[cur_parameter] = parameter_list[cur_index]
+    cur_func = function (cur_index::Integer)
+      tmp_dict = deepcopy(cur_dict)
+      tmp_dict[cur_parameter] = parameter_list[cur_index]
 
-    tmp_reactor = Reactor(symbols(:T_bar), tmp_dict)
+      tmp_reactor = Reactor(symbols(:T_bar), tmp_dict)
 
-    if tmp_reactor.is_consistent
-      cur_kink_reactor = hone(tmp_reactor, :kink)
-    else
-      cur_kink_reactor = match(tmp_reactor, :kink)
+      if tmp_reactor.is_consistent
+        cur_kink_reactor = hone(tmp_reactor, :kink)
+      else
+        cur_kink_reactor = match(tmp_reactor, :kink)
+      end
+
+      ( cur_kink_reactor == nothing ) && return
+
+      cur_array[cur_index,1] = cur_kink_reactor.T_bar
+      cur_array[cur_index,2] = cur_kink_reactor.I_P
+      cur_array[cur_index,3] = cur_kink_reactor.eta_CD
     end
 
-    ( cur_kink_reactor == nothing ) && return
+    if is_parallel
+      if verbose
+        cur_progress = Progress(num_points)
+        pmap(cur_func, cur_progress, shuffle(1:num_points))
+      else
+        pmap(cur_func, shuffle(1:num_points))
+      end
+    else
+      map(cur_func, shuffle(1:num_points))
+    end
 
-    cur_array[cur_index,1] = cur_kink_reactor.T_bar
-    cur_array[cur_index,2] = cur_kink_reactor.I_P
-    cur_array[cur_index,3] = cur_kink_reactor.eta_CD
-  end
+    for (cur_index, cur_value) in enumerate(parameter_list)
+      any(isnan, cur_array[cur_index,:]) && continue
+      cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
 
-  cur_progress = Progress(num_points)
-  pmap(cur_func, cur_progress, shuffle(1:num_points))
+      tmp_dict = deepcopy(cur_dict)
+      tmp_dict[cur_parameter] = parameter_list[cur_index]
 
-  for (cur_index, cur_value) in enumerate(parameter_list)
-    cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
+      work_reactor = Reactor(cur_T_bar, tmp_dict)
+      work_reactor.I_P = cur_I_P
+      work_reactor.eta_CD = cur_eta_CD
 
-    isnan(cur_eta_CD) && continue
-    isnan(cur_T_bar) && continue
-    isnan(cur_I_P) && continue
-
-    tmp_dict = deepcopy(cur_dict)
-    tmp_dict[cur_parameter] = parameter_list[cur_index]
-
-    work_reactor = Reactor(cur_T_bar, tmp_dict)
-    work_reactor.I_P = cur_I_P
-    work_reactor.eta_CD = cur_eta_CD
-
-    push!(cur_study.kink_reactors, update!(work_reactor))
+      push!(cur_study.kink_reactors, update!(work_reactor))
+    end
   end
 
   cur_array = SharedArray{Float64}(num_points, 3)
@@ -133,8 +152,16 @@ function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_k
     cur_array[cur_index,3] = cur_wall_reactor.eta_CD
   end
 
-  cur_progress = Progress(num_points)
-  pmap(cur_func, cur_progress, shuffle(1:num_points))
+  if is_parallel
+    if verbose
+      cur_progress = Progress(num_points)
+      pmap(cur_func, cur_progress, shuffle(1:num_points))
+    else
+      pmap(cur_func, shuffle(1:num_points))
+    end
+  else
+    map(cur_func, shuffle(1:num_points))
+  end
 
   for (cur_index, cur_value) in enumerate(parameter_list)
     cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]
@@ -192,8 +219,16 @@ function Study(cur_parameter; sensitivity=0.2, num_points=9, deck=nothing, cur_k
       cur_array[cur_index,3] = cur_cost_reactor.eta_CD
     end
 
-    cur_progress = Progress(num_points)
-    pmap(cur_func, cur_progress, shuffle(1:num_points))
+    if is_parallel
+      if verbose
+        cur_progress = Progress(num_points)
+        pmap(cur_func, cur_progress, shuffle(1:num_points))
+      else
+        pmap(cur_func, shuffle(1:num_points))
+      end
+    else
+      map(cur_func, shuffle(1:num_points))
+    end
 
     for (cur_index, cur_value) in enumerate(parameter_list)
       cur_T_bar, cur_I_P, cur_eta_CD = cur_array[cur_index,:]

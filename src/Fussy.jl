@@ -4,6 +4,7 @@ module Fussy
 
   using PmapProgressMeter
   using DataStructures
+  using Distributions
   using ProgressMeter
   using Parameters
   using SymEngine
@@ -12,6 +13,8 @@ module Fussy
   using QuadGK
   using Roots
   using Optim
+
+  using Revise
 
   include("abstracts.jl")
   include("defaults.jl")
@@ -24,6 +27,7 @@ module Fussy
   include("decks/index.jl")
   include("solutions/index.jl")
 
+  export Sampling
   export Reactor
   export Study
   export Scan

@@ -9,11 +9,14 @@ function match(cur_reactor::AbstractReactor, cur_constraint::Symbol)
     tmp_reactor.T_bar <= 0 && return NaN
 
     tmp_reactor.sigma_v = calc_sigma_v(tmp_reactor)
+
     isnan(tmp_reactor.sigma_v) && return NaN
 
-    cur_error = tmp_reactor.I_P
+    cur_error = calc_I_P(tmp_reactor)
 
-    cur_error -= calc_I_P(tmp_reactor)
+    cur_error /= symbols(:I_P)
+
+    cur_error -= 1.0
 
     tmp_I_P = calc_I_P(tmp_reactor, cur_constraint)
 

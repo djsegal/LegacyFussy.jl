@@ -131,10 +131,38 @@ function find_bisection_roots(f, cur_range::AbstractVector{T}, abstol::Real, rel
 
   cur_values = f.(cur_range)
 
-  cur_signs = map(sign, cur_values[1:end-1] .* cur_values[2:end])
+  cur_finite_count = count(isfinite, cur_values)
 
-  all(isinf, cur_signs) && return []
-  all(isnan, cur_signs) && return []
+  iszero(cur_finite_count) && return []
+
+  if cur_finite_count == 1
+    cur_index = findfirst(isfinite, cur_values)
+    cur_point = cur_range[cur_index]
+
+    cur_diff_list = diff(cur_range)
+    filter_approx!(cur_diff_list; atol=10*eps())
+
+    @assert length(cur_diff_list) == 1
+    cur_diff = cur_diff_list[1]
+
+    cur_c = cur_point
+    cur_f_c = f(cur_c)
+
+    cur_a = cur_point - cur_diff
+    cur_b = cur_point + cur_diff
+
+    if 1 < cur_index < length(cur_values)
+      cur_root = custom_bisection(f, cur_a, cur_c, f(cur_a), cur_f_c; abstol=abstol)
+      isnan(cur_root) || return [cur_root]
+
+      cur_root = custom_bisection(f, cur_c, cur_b, cur_f_c, f(cur_b); abstol=abstol)
+      isnan(cur_root) || return [cur_root]
+    end
+
+    return []
+  end
+
+  cur_signs = map(sign, cur_values[1:end-1] .* cur_values[2:end])
 
   for (cur_index, cur_sign) in enumerate(cur_signs)
     isinf(cur_sign) && continue
@@ -206,6 +234,8 @@ function loose_isapprox(first_value, second_value, atol, rtol)
 end
 
 function custom_bisection(f, cur_a::Number, cur_b::Number, cur_f_a::Number, cur_f_b::Number, cur_flag::Bool=true; abstol::Number=10*eps(), cur_c::Number=NaN, cur_f_c::Number=NaN, cur_d::Number=NaN, cur_f_d::Number=NaN, bad_streak::Number=0)
+  ( bad_streak > 4 ) && return NaN
+
   init_a = cur_a
   init_b = cur_b
 
@@ -238,7 +268,7 @@ function custom_bisection(f, cur_a::Number, cur_b::Number, cur_f_a::Number, cur_
   ( is_bad_a && is_bad_b ) && return NaN
 
   if is_bad_a || is_bad_b || is_bad_c
-    if !is_bad_d && ( isapprox(cur_c, cur_a, atol=atol) || isapprox(cur_c, cur_b, atol=atol) )
+    if !is_bad_d && ( isapprox(cur_c, cur_a, atol=abstol) || isapprox(cur_c, cur_b, atol=abstol) )
       cur_g = cur_d
       cur_f_g = cur_f_d
     else
@@ -246,9 +276,11 @@ function custom_bisection(f, cur_a::Number, cur_b::Number, cur_f_a::Number, cur_
       cur_f_g = cur_f_c
     end
 
-    cur_root = custom_bisection(f, cur_a, cur_g, cur_f_a, cur_f_c, abstol=abstol)
+    bad_streak += 1
+
+    cur_root = custom_bisection(f, cur_a, cur_g, cur_f_a, cur_f_c, abstol=abstol, bad_streak=bad_streak)
     isnan(cur_root) &&
-      ( cur_root = custom_bisection(f, cur_g, cur_b, cur_f_c, cur_f_b, abstol=abstol) )
+      ( cur_root = custom_bisection(f, cur_g, cur_b, cur_f_c, cur_f_b, abstol=abstol, bad_streak=bad_streak) )
     return cur_root
   end
 
@@ -311,10 +343,9 @@ function custom_bisection(f, cur_a::Number, cur_b::Number, cur_f_a::Number, cur_
   if ( is_bad_f_a && is_bad_f_b )
     bad_streak += 1
   else
-    bad_streak = 0
+    bad_streak -= 2
+    bad_streak = max(0, bad_streak)
   end
-
-  ( bad_streak > 4 ) && return NaN
 
   is_unchanged = isapprox(cur_a, init_a, atol=2*eps())
   is_unchanged &= isapprox(cur_b, init_b, atol=2*eps())

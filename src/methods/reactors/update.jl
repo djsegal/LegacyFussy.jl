@@ -89,8 +89,7 @@ function update!(cur_reactor::AbstractReactor)
     cur_reactor.R_CS = R_CS(cur_reactor)
     cur_reactor.h_CS = h_CS(cur_reactor)
 
-    cur_reactor.is_pulsed &&
-      ( @assert cur_reactor.R_CS >= 0 )
+    @assert cur_reactor.R_CS >= 0
 
   catch cur_error
 

@@ -1,4 +1,4 @@
-function hone(cur_reactor::AbstractReactor, cur_constraint::Symbol; reltol::Number=3e-3, max_attempts::Int = 10)
+function hone(cur_reactor::AbstractReactor, cur_constraint::Symbol; reltol::Number=3e-3, max_attempts::Int = 10, strong_fail::Bool = false)
   @assert cur_reactor.constraint == :beta
 
   prev_T = nothing
@@ -21,9 +21,19 @@ function hone(cur_reactor::AbstractReactor, cur_constraint::Symbol; reltol::Numb
     cur_eta_CD_list = converge(tmp_reactor; no_pts=5)
 
     isempty(cur_eta_CD_list) && return nothing
-    @assert length(cur_eta_CD_list) == 1
 
-    cur_bias = 0.75 / ceil(cur_index/4)
+    filter_approx!(cur_eta_CD_list, atol=3e-3)
+
+    if strong_fail
+      @assert length(cur_eta_CD_list) == 1
+    else
+      if length(cur_eta_CD_list) != 1
+        println(cur_eta_CD_list)
+        println(new_reactor)
+      end
+    end
+
+    cur_bias = 0.8
     tmp_eta_CD = cur_bias * work_reactor.eta_CD
     tmp_eta_CD += ( 1 - cur_bias ) * cur_eta_CD_list[1]
 
